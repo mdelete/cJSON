@@ -11,7 +11,7 @@
 #include "cJSON.h"
 
 enum {
-    STATE_ELEMENT,
+    STATE_ITEM,
     STATE_OBJECT_KEY,
     STATE_OBJECT_KEY_PARSED,
     STATE_OBJECT_VALUE,
@@ -19,7 +19,7 @@ enum {
     STATE_ARRAY_VALUE,
     STATE_ARRAY_VALUE_PARSED,
     STATE_STRING,
-    STATE_SPEC_CHAR,
+    STATE_SPECIAL_CHAR,
     STATE_NUMBER,
     STATE_TRUE,
     STATE_FALSE,
@@ -87,6 +87,9 @@ fail:
 
 static void append(cJSON *json, char byte)
 {
+    // Deliberate misuse of valueint to temporarily keep track of valuestring's length.
+    // After parsing is done, valueint is set back to zero.
+    // Another approach would be to call strlen() every time, as valuestring is null terminated.
     json->valuestring = realloc(json->valuestring, json->valueint + 1);
     json->valuestring[json->valueint++] = byte;
 }
@@ -101,16 +104,9 @@ static void invalidate(cJSON *json)
     json->valueint = 0;
 }
 
-static void reset(cJSON *json)
-{
-    json->valuestring = NULL;
-    json->valueint = 0;
-    json->state = STATE_ELEMENT;
-}
-
 static int is_whitespace(char byte)
 {
-    return (byte == ' ' || byte == '\t' || byte == '\n' || byte == '\v' || byte == '\f' || byte == '\r' ); // or simply: (byte <= 32) ?
+    return (byte <= 0x20);
 }
 
 static int is_number(char byte)
@@ -139,7 +135,9 @@ static int state_object_key(cJSON *json, char byte)
     {
         json->state = STATE_OBJECT_KEY_PARSED;
         json->child->string = json->child->valuestring;
-        reset(json->child);
+        json->child->valuestring = NULL;
+        json->child->valueint = 0;
+        json->child->state = STATE_ITEM;
         return STATE_RETURN_CONT;
     }
 
@@ -164,7 +162,7 @@ static int state_object_key_parsed(cJSON *json, char byte)
     }
 }
 
-static int state_object_value(cJSON *json, char byte)
+static int state_object_array_value(cJSON *json, char byte)
 {
     int retval;
 
@@ -173,66 +171,9 @@ static int state_object_value(cJSON *json, char byte)
         return STATE_RETURN_CONT;
     }
 
-    retval = putbyte(json->child, byte);
-
-    if (retval == STATE_RETURN_DONE)
-    {
-        json->state = STATE_OBJECT_VALUE_PARSED;
-        // state_number already consumed the terminating char, so put it back again
-        if (json->child->type == cJSON_Number)
-        {
-            return putbyte(json, byte);
-        }
-        else
-        {
-            return STATE_RETURN_CONT;
-        }
-    }
-
-    return retval;
-}
-
-static int state_object_value_parsed(cJSON *json, char byte)
-{
-    if (is_whitespace(byte))
-    {
-        return STATE_RETURN_CONT;
-    }
-    else if (byte == ',')
-    {
-        json->child->next = cJSON_New_Item_2();
-        json->child->next->prev = json->child;
-        json->child = json->child->next;
-        json->state = STATE_OBJECT_KEY;
-
-        return STATE_RETURN_CONT;
-    }
-    else if (byte == '}')
-    {
-        while(json->child->prev)
-        {
-            json->child = json->child->prev;
-        }
-        return STATE_RETURN_DONE;
-    }
-    else
-    {
-        return STATE_RETURN_FAIL;
-    }
-}
-
-static int state_array_value(cJSON *json, char byte)
-{
-    int retval;
-
-    if (is_whitespace(byte))
-    {
-        return STATE_RETURN_CONT;
-    }
-
-    //if(byte == ']')
-    //    return STATE_RETURN_CONT;
     // FIXME: does not parse empty array '[]'
+    //if(byte == ']' && json->state == STATE_ARRAY_VALUE)
+    //    return STATE_RETURN_CONT;
 
     if (!json->child)
     {
@@ -243,7 +184,7 @@ static int state_array_value(cJSON *json, char byte)
 
     if (retval == STATE_RETURN_DONE)
     {
-        json->state = STATE_ARRAY_VALUE_PARSED;
+        json->state = (json->state == STATE_ARRAY_VALUE) ? STATE_ARRAY_VALUE_PARSED : STATE_OBJECT_VALUE_PARSED;
         // state_number already consumed the terminating char, so put it back again
         if (json->child->type == cJSON_Number)
         {
@@ -258,7 +199,7 @@ static int state_array_value(cJSON *json, char byte)
     return retval;
 }
 
-static int state_array_value_parsed(cJSON *json, char byte)
+static int state_object_array_value_parsed(cJSON *json, char byte)
 {
     if (is_whitespace(byte))
     {
@@ -269,11 +210,11 @@ static int state_array_value_parsed(cJSON *json, char byte)
         json->child->next = cJSON_New_Item_2();
         json->child->next->prev = json->child;
         json->child = json->child->next;
-        json->state = STATE_ARRAY_VALUE;
+        json->state = (json->state == STATE_ARRAY_VALUE_PARSED) ? STATE_ARRAY_VALUE : STATE_OBJECT_KEY;
 
         return STATE_RETURN_CONT;
     }
-    else if (byte == ']')
+    else if ((byte == ']' && json->state == STATE_ARRAY_VALUE_PARSED) || (byte == '}' && json->state == STATE_OBJECT_VALUE_PARSED))
     {
         while(json->child->prev)
         {
@@ -287,7 +228,7 @@ static int state_array_value_parsed(cJSON *json, char byte)
     }
 }
 
-static int state_element(cJSON *json, char byte)
+static int state_item(cJSON *json, char byte)
 {
     switch (byte)
     {
@@ -355,7 +296,7 @@ static int state_string(cJSON *json, char byte)
     }
     else if (byte == '\\')
     {
-        json->state = STATE_SPEC_CHAR;
+        json->state = STATE_SPECIAL_CHAR;
     }
     else
     {
@@ -365,7 +306,7 @@ static int state_string(cJSON *json, char byte)
     return STATE_RETURN_CONT;
 }
 
-static int state_spec_char(cJSON *json, char byte)
+static int state_special_char(cJSON *json, char byte)
 {
     switch (byte)
     {
@@ -485,8 +426,8 @@ static int putbyte(cJSON * const item, char byte)
 {
     switch (item->state)
     {
-    case STATE_ELEMENT:
-        return state_element(item, byte);
+    case STATE_ITEM:
+        return state_item(item, byte);
         break;
 
     case STATE_OBJECT_KEY:
@@ -497,28 +438,22 @@ static int putbyte(cJSON * const item, char byte)
         return state_object_key_parsed(item, byte);
         break;
 
-    case STATE_ARRAY_VALUE:
-        return state_array_value(item, byte);
-        break;
-
     case STATE_OBJECT_VALUE:
-        return state_object_value(item, byte);
+    case STATE_ARRAY_VALUE:
+        return state_object_array_value(item, byte);
         break;
 
     case STATE_OBJECT_VALUE_PARSED:
-        return state_object_value_parsed(item, byte);
-        break;
-
     case STATE_ARRAY_VALUE_PARSED:
-        return state_array_value_parsed(item, byte);
+        return state_object_array_value_parsed(item, byte);
         break;
 
     case STATE_STRING:
         return state_string(item, byte);
         break;
 
-    case STATE_SPEC_CHAR:
-        return state_spec_char(item, byte);
+    case STATE_SPECIAL_CHAR:
+        return state_special_char(item, byte);
         break;
 
     case STATE_NUMBER:
