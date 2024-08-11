@@ -109,11 +109,6 @@ static int is_whitespace(char byte)
     return (byte <= 0x20);
 }
 
-static int is_number(char byte)
-{
-    return (byte >= 0x30 && byte <= 0x39);
-}
-
 static int state_object_key(cJSON *json, char byte)
 {
     int retval;
@@ -348,7 +343,8 @@ static int state_special_char(cJSON *json, char byte)
 
 static int state_number(cJSON *json, char byte)
 {
-    if (is_number(byte) || byte == '.' || byte == 'e' || byte == 'E' || byte == '-' || byte == '+')
+    if (byte == '0' || byte == '1' || byte == '2' || byte == '3' || byte == '4' || byte == '5' || byte == '6' ||
+        byte == '7' || byte == '8' || byte == '9' || byte == '.' || byte == 'e' || byte == 'E' || byte == '-' || byte == '+')
     {
         append(json, byte);
     }
