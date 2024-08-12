@@ -231,35 +231,29 @@ static int state_item(cJSON *json, char byte)
         json->state = STATE_OBJECT_KEY;
         json->type = cJSON_Object;
         return STATE_RETURN_CONT;
-        break;
     case '[':
         json->state = STATE_ARRAY_VALUE;
         json->type = cJSON_Array;
         return STATE_RETURN_CONT;
-        break;
     case '"':
         json->state = STATE_STRING;
         json->type = cJSON_String;
         return STATE_RETURN_CONT;
-        break;
     case 't':
         json->state = STATE_TRUE;
         json->type = cJSON_True;
         append(json, byte);
         return STATE_RETURN_CONT;
-        break;
     case 'f':
         json->state = STATE_FALSE;
         json->type = cJSON_False;
         append(json, byte);
         return STATE_RETURN_CONT;
-        break;
     case 'n':
         json->state = STATE_NULL;
         json->type = cJSON_NULL;
         append(json, byte);
         return STATE_RETURN_CONT;
-        break;
     case '-':
     case '0':
     case '1':
@@ -275,10 +269,8 @@ static int state_item(cJSON *json, char byte)
         json->type = cJSON_Number;
         append(json, byte);
         return STATE_RETURN_CONT;
-        break;
     default:
         return STATE_RETURN_FAIL;
-        break;
     }
 }
 
@@ -372,7 +364,7 @@ static int state_true(cJSON *json, char byte)
         return STATE_RETURN_CONT;
     }
 
-    if (json->valueint == 4 && strncmp(json->valuestring, "true", 4) == 0)
+    if (strncmp(json->valuestring, "true", 4) == 0)
     {
         invalidate(json);
         return STATE_RETURN_DONE;
@@ -390,7 +382,7 @@ static int state_false(cJSON *json, char byte)
         return STATE_RETURN_CONT;
     }
 
-    if (json->valueint == 5 && strncmp(json->valuestring, "false", 5) == 0)
+    if (strncmp(json->valuestring, "false", 5) == 0)
     {
         invalidate(json);
         return STATE_RETURN_DONE;
