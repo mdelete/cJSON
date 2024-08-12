@@ -52,11 +52,10 @@ CJSON_PUBLIC(cJSON *) cJSON_Put(cJSON * item, const char byte, bool * complete)
     if (item == NULL)
     {
         item = cJSON_New_Item_2();
-    }
-
-    if (item == NULL)
-    {
-        goto fail;
+        if (item == NULL)
+        {
+            goto fail;
+        }
     }
 
     retval = putbyte(item, byte);
@@ -85,23 +84,23 @@ fail:
     return item;
 }
 
-static void append(cJSON *json, char byte)
+static void append(cJSON *item, char byte)
 {
     // Deliberate misuse of valueint to temporarily keep track of valuestring's length.
     // After parsing is done, valueint is set back to zero.
     // Another approach would be to call strlen() every time, as valuestring is null terminated.
-    json->valuestring = realloc(json->valuestring, json->valueint + 1);
-    json->valuestring[json->valueint++] = byte;
+    item->valuestring = realloc(item->valuestring, item->valueint + 1);
+    item->valuestring[item->valueint++] = byte;
 }
 
-static void invalidate(cJSON *json)
+static void invalidate(cJSON *item)
 {
-    if (json->valuestring)
+    if (item->valuestring)
     {
-        free(json->valuestring);
-        json->valuestring = NULL;
+        free(item->valuestring);
+        item->valuestring = NULL;
     }
-    json->valueint = 0;
+    item->valueint = 0;
 }
 
 static int is_whitespace(char byte)
@@ -109,7 +108,7 @@ static int is_whitespace(char byte)
     return (byte <= 0x20);
 }
 
-static int state_object_key(cJSON *json, char byte)
+static int state_object_key(cJSON *item, char byte)
 {
     int retval;
 
@@ -119,27 +118,32 @@ static int state_object_key(cJSON *json, char byte)
     if (byte == '}')
         return STATE_RETURN_DONE;
 
-    if (!json->child)
+    if (item->child == NULL)
     {
-        json->child = cJSON_New_Item_2();
+        item->child = cJSON_New_Item_2();
+
+        if (item->child == NULL)
+        {
+            return STATE_RETURN_FAIL;
+        }
     }
 
-    retval = putbyte(json->child, byte);
+    retval = putbyte(item->child, byte);
 
     if (retval == STATE_RETURN_DONE)
     {
-        json->state = STATE_OBJECT_KEY_PARSED;
-        json->child->string = json->child->valuestring;
-        json->child->valuestring = NULL;
-        json->child->valueint = 0;
-        json->child->state = STATE_ITEM;
+        item->state = STATE_OBJECT_KEY_PARSED;
+        item->child->string = item->child->valuestring;
+        item->child->valuestring = NULL;
+        item->child->valueint = 0;
+        item->child->state = STATE_ITEM;
         return STATE_RETURN_CONT;
     }
 
     return retval;
 }
 
-static int state_object_key_parsed(cJSON *json, char byte)
+static int state_object_key_parsed(cJSON *item, char byte)
 {
     if (is_whitespace(byte))
     {
@@ -148,7 +152,7 @@ static int state_object_key_parsed(cJSON *json, char byte)
 
     if (byte == ':')
     {
-        json->state = STATE_OBJECT_VALUE;
+        item->state = STATE_OBJECT_VALUE;
         return STATE_RETURN_CONT;
     }
     else
@@ -157,7 +161,7 @@ static int state_object_key_parsed(cJSON *json, char byte)
     }
 }
 
-static int state_object_array_value(cJSON *json, char byte)
+static int state_object_array_value(cJSON *item, char byte)
 {
     int retval;
 
@@ -170,20 +174,25 @@ static int state_object_array_value(cJSON *json, char byte)
     //if(byte == ']' && json->state == STATE_ARRAY_VALUE)
     //    return STATE_RETURN_CONT;
 
-    if (!json->child)
+    if (item->child == NULL)
     {
-        json->child = cJSON_New_Item_2();
+        item->child = cJSON_New_Item_2();
+
+        if (item->child == NULL)
+        {
+            return STATE_RETURN_FAIL;
+        }
     }
 
-    retval = putbyte(json->child, byte);
+    retval = putbyte(item->child, byte);
 
     if (retval == STATE_RETURN_DONE)
     {
-        json->state = (json->state == STATE_ARRAY_VALUE) ? STATE_ARRAY_VALUE_PARSED : STATE_OBJECT_VALUE_PARSED;
+        item->state = (item->state == STATE_ARRAY_VALUE) ? STATE_ARRAY_VALUE_PARSED : STATE_OBJECT_VALUE_PARSED;
         // state_number already consumed the terminating char, so put it back again
-        if (json->child->type == cJSON_Number)
+        if (item->child->type == cJSON_Number)
         {
-            return putbyte(json, byte);
+            return putbyte(item, byte);
         }
         else
         {
@@ -194,7 +203,7 @@ static int state_object_array_value(cJSON *json, char byte)
     return retval;
 }
 
-static int state_object_array_value_parsed(cJSON *json, char byte)
+static int state_object_array_value_parsed(cJSON *item, char byte)
 {
     if (is_whitespace(byte))
     {
@@ -202,18 +211,22 @@ static int state_object_array_value_parsed(cJSON *json, char byte)
     }
     else if (byte == ',')
     {
-        json->child->next = cJSON_New_Item_2();
-        json->child->next->prev = json->child;
-        json->child = json->child->next;
-        json->state = (json->state == STATE_ARRAY_VALUE_PARSED) ? STATE_ARRAY_VALUE : STATE_OBJECT_KEY;
+        item->child->next = cJSON_New_Item_2();
+        if (item->child->next == NULL)
+        {
+            return STATE_RETURN_FAIL;
+        }
+        item->child->next->prev = item->child;
+        item->child = item->child->next;
+        item->state = (item->state == STATE_ARRAY_VALUE_PARSED) ? STATE_ARRAY_VALUE : STATE_OBJECT_KEY;
 
         return STATE_RETURN_CONT;
     }
-    else if ((byte == ']' && json->state == STATE_ARRAY_VALUE_PARSED) || (byte == '}' && json->state == STATE_OBJECT_VALUE_PARSED))
+    else if ((byte == ']' && item->state == STATE_ARRAY_VALUE_PARSED) || (byte == '}' && item->state == STATE_OBJECT_VALUE_PARSED))
     {
-        while(json->child->prev)
+        while(item->child->prev)
         {
-            json->child = json->child->prev;
+            item->child = item->child->prev;
         }
         return STATE_RETURN_DONE;
     }
@@ -223,36 +236,36 @@ static int state_object_array_value_parsed(cJSON *json, char byte)
     }
 }
 
-static int state_item(cJSON *json, char byte)
+static int state_item(cJSON *item, char byte)
 {
     switch (byte)
     {
     case '{':
-        json->state = STATE_OBJECT_KEY;
-        json->type = cJSON_Object;
+        item->state = STATE_OBJECT_KEY;
+        item->type = cJSON_Object;
         return STATE_RETURN_CONT;
     case '[':
-        json->state = STATE_ARRAY_VALUE;
-        json->type = cJSON_Array;
+        item->state = STATE_ARRAY_VALUE;
+        item->type = cJSON_Array;
         return STATE_RETURN_CONT;
     case '"':
-        json->state = STATE_STRING;
-        json->type = cJSON_String;
+        item->state = STATE_STRING;
+        item->type = cJSON_String;
         return STATE_RETURN_CONT;
     case 't':
-        json->state = STATE_TRUE;
-        json->type = cJSON_True;
-        append(json, byte);
+        item->state = STATE_TRUE;
+        item->type = cJSON_True;
+        append(item, byte);
         return STATE_RETURN_CONT;
     case 'f':
-        json->state = STATE_FALSE;
-        json->type = cJSON_False;
-        append(json, byte);
+        item->state = STATE_FALSE;
+        item->type = cJSON_False;
+        append(item, byte);
         return STATE_RETURN_CONT;
     case 'n':
-        json->state = STATE_NULL;
-        json->type = cJSON_NULL;
-        append(json, byte);
+        item->state = STATE_NULL;
+        item->type = cJSON_NULL;
+        append(item, byte);
         return STATE_RETURN_CONT;
     case '-':
     case '0':
@@ -265,62 +278,62 @@ static int state_item(cJSON *json, char byte)
     case '7':
     case '8':
     case '9':
-        json->state = STATE_NUMBER;
-        json->type = cJSON_Number;
-        append(json, byte);
+        item->state = STATE_NUMBER;
+        item->type = cJSON_Number;
+        append(item, byte);
         return STATE_RETURN_CONT;
     default:
         return STATE_RETURN_FAIL;
     }
 }
 
-static int state_string(cJSON *json, char byte)
+static int state_string(cJSON *item, char byte)
 {
     if (byte == '"')
     {
-        append(json, '\0');
+        append(item, '\0');
         return STATE_RETURN_DONE;
     }
     else if (byte == '\\')
     {
-        json->state = STATE_SPECIAL_CHAR;
+        item->state = STATE_SPECIAL_CHAR;
     }
     else
     {
-        append(json, byte);
+        append(item, byte);
     }
 
     return STATE_RETURN_CONT;
 }
 
-static int state_special_char(cJSON *json, char byte)
+static int state_special_char(cJSON *item, char byte)
 {
     switch (byte)
     {
     case 'b':
-        append(json, '\b');
+        append(item, '\b');
         break;
 
     case 'f':
-        append(json, '\f');
+        append(item, '\f');
         break;
 
     case 'n':
-        append(json, '\n');
+        append(item, '\n');
         break;
 
     case 'r':
-        append(json, '\r');
+        append(item, '\r');
         break;
 
     case 't':
-        append(json, '\t');
+        append(item, '\t');
         break;
 
     case '"':
     case '\\':
     case '/':
-        append(json, byte);
+        append(item, byte);
         break;
 
     default:
@@ -328,23 +341,23 @@ static int state_special_char(cJSON *json, char byte)
         break;
     }
 
-    json->state = STATE_STRING;
+    item->state = STATE_STRING;
 
     return STATE_RETURN_CONT;
 }
 
-static int state_number(cJSON *json, char byte)
+static int state_number(cJSON *item, char byte)
 {
     if (byte == '0' || byte == '1' || byte == '2' || byte == '3' || byte == '4' || byte == '5' || byte == '6' ||
         byte == '7' || byte == '8' || byte == '9' || byte == '.' || byte == 'e' || byte == 'E' || byte == '-' || byte == '+')
     {
-        append(json, byte);
+        append(item, byte);
     }
     else if (is_whitespace(byte) || byte == ',' || byte == '}' || byte == ']')
     {
-        append(json, '\0');
-        json->valuedouble = strtod(json->valuestring, 0);
-        invalidate(json);
+        append(item, '\0');
+        item->valuedouble = strtod(item->valuestring, 0);
+        invalidate(item);
         return STATE_RETURN_DONE;
     }
     else
@@ -355,57 +368,57 @@ static int state_number(cJSON *json, char byte)
     return STATE_RETURN_CONT;
 }
 
-static int state_true(cJSON *json, char byte)
+static int state_true(cJSON *item, char byte)
 {
-    append(json, byte);
+    append(item, byte);
 
-    if (json->valueint < 4)
+    if (item->valueint < 4)
     {
         return STATE_RETURN_CONT;
     }
 
-    if (strncmp(json->valuestring, "true", 4) == 0)
+    if (strncmp(item->valuestring, "true", 4) == 0)
     {
-        invalidate(json);
+        invalidate(item);
         return STATE_RETURN_DONE;
     }
 
     return STATE_RETURN_FAIL;
 }
 
-static int state_false(cJSON *json, char byte)
+static int state_false(cJSON *item, char byte)
 {
-    append(json, byte);
+    append(item, byte);
 
-    if (json->valueint < 5)
+    if (item->valueint < 5)
     {
         return STATE_RETURN_CONT;
     }
 
-    if (strncmp(json->valuestring, "false", 5) == 0)
+    if (strncmp(item->valuestring, "false", 5) == 0)
     {
-        invalidate(json);
+        invalidate(item);
         return STATE_RETURN_DONE;
     }
 
     return STATE_RETURN_FAIL;
 }
 
-static int state_null(cJSON *json, char byte)
+static int state_null(cJSON *item, char byte)
 {
-    append(json, byte);
+    append(item, byte);
 
-    if (json->valueint < 4)
+    if (item->valueint < 4)
     {
         return STATE_RETURN_CONT;
     }
 
-    if (strncmp(json->valuestring, "null", 4) != 0)
+    if (strncmp(item->valuestring, "null", 4) != 0)
     {
         return STATE_RETURN_FAIL;
     }
 
-    invalidate(json);
+    invalidate(item);
 
     return STATE_RETURN_DONE;
 }
