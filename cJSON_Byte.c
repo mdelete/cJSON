@@ -392,6 +392,7 @@ static int state_number(cJSON *item, char byte)
         byte == '+')
     {
         scratchbuf[scratch_it++] = byte;
+        return STATE_RETURN_CONT;
     }
     else if (is_whitespace(byte) || byte == ',' || byte == '}' || byte == ']')
     {
@@ -405,8 +406,6 @@ static int state_number(cJSON *item, char byte)
     {
         return STATE_RETURN_FAIL;
     }
-
-    return STATE_RETURN_CONT;
 }
 
 static int state_true(cJSON *item, char byte)
@@ -417,14 +416,15 @@ static int state_true(cJSON *item, char byte)
     {
         return STATE_RETURN_CONT;
     }
-
-    if (strncmp(scratchbuf, "true", 4) == 0)
+    else if (strncmp(scratchbuf, "true", 4) == 0)
     {
         scratch_it = 0;
         return STATE_RETURN_DONE;
     }
-
-    return STATE_RETURN_FAIL;
+    else
+    {
+        return STATE_RETURN_FAIL;
+    }
 }
 
 static int state_false(cJSON *item, char byte)
@@ -435,14 +435,15 @@ static int state_false(cJSON *item, char byte)
     {
         return STATE_RETURN_CONT;
     }
-
-    if (strncmp(scratchbuf, "false", 5) == 0)
+    else if (strncmp(scratchbuf, "false", 5) == 0)
     {
         scratch_it = 0;
         return STATE_RETURN_DONE;
     }
-
-    return STATE_RETURN_FAIL;
+    else
+    {
+        return STATE_RETURN_FAIL;
+    }
 }
 
 static int state_null(cJSON *item, char byte)
@@ -453,14 +454,15 @@ static int state_null(cJSON *item, char byte)
     {
         return STATE_RETURN_CONT;
     }
-
-    if (strncmp(scratchbuf, "null", 4) == 0)
+    else if (strncmp(scratchbuf, "null", 4) == 0)
     {
         scratch_it = 0;
         return STATE_RETURN_DONE;
     }
-
-    return STATE_RETURN_FAIL;
+    else
+    {
+        return STATE_RETURN_FAIL;
+    }
 }
 
 static int putbyte(cJSON *const item, char byte)
