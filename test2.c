@@ -2,12 +2,12 @@
  * gcc -o test2 test2.c cJSON.c cJSON_Byte.c
  */
 
-#include <stdio.h>
 #include <stdbool.h>
+#include <stdio.h>
 
 #include "cJSON.h"
 
-CJSON_PUBLIC(cJSON *) cJSON_Put(cJSON * item, const char byte, bool * complete);
+CJSON_PUBLIC(cJSON *) cJSON_Put(cJSON *item, const char byte, bool *complete);
 
 int main()
 {
@@ -15,13 +15,14 @@ int main()
     cJSON *item = NULL;
     bool complete;
 
-    while ((ch = getchar())) {
+    while ((ch = getchar()))
+    {
         item = cJSON_Put(item, ch, &complete);
-        if (item && complete) {
+        if (complete)
+        {
             printf("cJSON_Print: %s\n", cJSON_Print(item));
             cJSON_Delete(item);
-            item = NULL;
-            complete = false;
+            item = NULL, complete = false;
         }
     }
 
