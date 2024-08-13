@@ -4,7 +4,6 @@
  */
 
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -36,13 +35,20 @@ enum
 
 static int putbyte(cJSON *const item, char byte);
 
-static char scratchbuf[128]; // This makes it thread-unsafe but massively
-                             // reduces allocations
+// This is thread-unsafe but massively reduces (re-)allocations
+// FIXME: create a parsing context and add a dynamically allocated scratch buffer there
+static size_t scratch_it = 0;
+static char scratchbuf[128]; // sizeof(scratchbuf)-1 is also the maximum key or string length, may not be less
+
+// FEATURE: deliberately misusing cJSON attribute valueint to keep the parser state, as it is never written when parsing
+#define STATE item->valueint
+#define CHILDSTATE item->child->valueint
+#define MALLOC malloc
 
 // FIXME: duplicated cJSON_New_Item because of visibility
 static cJSON *cJSON_New_Item_2()
 {
-    cJSON *node = (cJSON *)malloc(sizeof(cJSON));
+    cJSON *node = (cJSON *)MALLOC(sizeof(cJSON));
     if (node)
     {
         memset(node, '\0', sizeof(cJSON));
@@ -67,11 +73,14 @@ CJSON_PUBLIC(cJSON *) cJSON_Put(cJSON *item, const char byte, bool *complete)
 
     if (retval == STATE_RETURN_FAIL)
     {
-        printf("parse fail at '%c'", byte);
+        scratch_it = 0;
+        // if (byte != '\n')
+        //     printf("parse fail at '%c'\n", byte);
         goto fail;
     }
     else if (retval == STATE_RETURN_DONE)
     {
+        scratch_it = 0;
         if (complete != NULL)
         {
             *complete = true;
@@ -90,38 +99,34 @@ fail:
     return item;
 }
 
-static int append(cJSON *item, char byte)
+static int string_append(cJSON *item, char byte)
 {
-    // Deliberate misuse of valueint to temporarily keep track of valuestring's
-    // length. After parsing is done, valueint is set back to zero. Another
-    // approach would be to call strlen() every time, as valuestring is null
-    // terminated.
-    if (item->valueint >= sizeof(scratchbuf))
+    if (scratch_it >= sizeof(scratchbuf))
     {
         return STATE_RETURN_FAIL;
     }
 
-    scratchbuf[item->valueint] = byte;
+    scratchbuf[scratch_it] = byte;
 
     if (byte == '\0')
     {
-        item->valuestring = malloc(item->valueint);
+        item->valuestring = MALLOC(scratch_it + sizeof(""));
         if (item->valuestring == NULL)
         {
             return STATE_RETURN_FAIL;
         }
-        memcpy(item->valuestring, scratchbuf, item->valueint);
-        item->valueint = 0;
+        memcpy(item->valuestring, scratchbuf, scratch_it + sizeof(""));
+        scratch_it = 0;
 
         return STATE_RETURN_DONE;
     }
 
-    item->valueint++;
+    scratch_it++;
 
     return STATE_RETURN_CONT;
 }
 
-static int is_whitespace(char byte)
+static inline int is_whitespace(char byte)
 {
     return (byte <= 0x20);
 }
@@ -130,31 +135,45 @@ static int state_object_key(cJSON *item, char byte)
 {
     int retval;
 
-    if (is_whitespace(byte))
-        return STATE_RETURN_CONT;
-
-    if (byte == '}')
-        return STATE_RETURN_DONE;
-
     if (item->child == NULL)
     {
+        if (is_whitespace(byte))
+        {
+            return STATE_RETURN_CONT;
+        }
+        else if (byte == '}')
+        {
+            return STATE_RETURN_DONE;
+        }
+        else if (byte != '"')
+        {
+            return STATE_RETURN_FAIL;
+        }
+
         item->child = cJSON_New_Item_2();
 
         if (item->child == NULL)
         {
             return STATE_RETURN_FAIL;
         }
+
+        item->child->type = cJSON_String;
+
+        CHILDSTATE = STATE_STRING;
+
+        return STATE_RETURN_CONT;
     }
 
     retval = putbyte(item->child, byte);
 
     if (retval == STATE_RETURN_DONE)
     {
-        item->state = STATE_OBJECT_KEY_PARSED;
         item->child->string = item->child->valuestring;
         item->child->valuestring = NULL;
-        item->child->valueint = 0;
-        item->child->state = STATE_ITEM;
+
+        STATE = STATE_OBJECT_KEY_PARSED;
+        CHILDSTATE = STATE_ITEM;
+
         return STATE_RETURN_CONT;
     }
 
@@ -167,10 +186,9 @@ static int state_object_key_parsed(cJSON *item, char byte)
     {
         return STATE_RETURN_CONT;
     }
-
-    if (byte == ':')
+    else if (byte == ':')
     {
-        item->state = STATE_OBJECT_VALUE;
+        STATE = STATE_OBJECT_VALUE;
         return STATE_RETURN_CONT;
     }
     else
@@ -183,17 +201,17 @@ static int state_object_array_value(cJSON *item, char byte)
 {
     int retval;
 
-    if (is_whitespace(byte))
-    {
-        return STATE_RETURN_CONT;
-    }
-
-    // FIXME: does not parse empty array '[]'
-    // if(byte == ']' && json->state == STATE_ARRAY_VALUE)
-    //    return STATE_RETURN_CONT;
-
     if (item->child == NULL)
     {
+        if (is_whitespace(byte))
+        {
+            return STATE_RETURN_CONT;
+        }
+        else if (byte == ']')
+        {
+            return STATE_RETURN_DONE;
+        }
+
         item->child = cJSON_New_Item_2();
 
         if (item->child == NULL)
@@ -206,9 +224,8 @@ static int state_object_array_value(cJSON *item, char byte)
 
     if (retval == STATE_RETURN_DONE)
     {
-        item->state = (item->state == STATE_ARRAY_VALUE) ? STATE_ARRAY_VALUE_PARSED : STATE_OBJECT_VALUE_PARSED;
-        // state_number already consumed the terminating char, so put it back
-        // again
+        STATE = (STATE == STATE_ARRAY_VALUE) ? STATE_ARRAY_VALUE_PARSED : STATE_OBJECT_VALUE_PARSED;
+        // state_number already consumed the terminating char, so put it back again
         if (item->child->type == cJSON_Number)
         {
             return putbyte(item, byte);
@@ -237,12 +254,12 @@ static int state_object_array_value_parsed(cJSON *item, char byte)
         }
         item->child->next->prev = item->child;
         item->child = item->child->next;
-        item->state = (item->state == STATE_ARRAY_VALUE_PARSED) ? STATE_ARRAY_VALUE : STATE_OBJECT_KEY;
+
+        STATE = (STATE == STATE_ARRAY_VALUE_PARSED) ? STATE_ARRAY_VALUE : STATE_OBJECT_KEY;
 
         return STATE_RETURN_CONT;
     }
-    else if ((byte == ']' && item->state == STATE_ARRAY_VALUE_PARSED) ||
-             (byte == '}' && item->state == STATE_OBJECT_VALUE_PARSED))
+    else if ((byte == ']' && STATE == STATE_ARRAY_VALUE_PARSED) || (byte == '}' && STATE == STATE_OBJECT_VALUE_PARSED))
     {
         while (item->child->prev)
         {
@@ -261,31 +278,31 @@ static int state_item(cJSON *item, char byte)
     switch (byte)
     {
     case '{':
-        item->state = STATE_OBJECT_KEY;
+        STATE = STATE_OBJECT_KEY;
         item->type = cJSON_Object;
         return STATE_RETURN_CONT;
     case '[':
-        item->state = STATE_ARRAY_VALUE;
+        STATE = STATE_ARRAY_VALUE;
         item->type = cJSON_Array;
         return STATE_RETURN_CONT;
     case '"':
-        item->state = STATE_STRING;
+        STATE = STATE_STRING;
         item->type = cJSON_String;
         return STATE_RETURN_CONT;
     case 't':
-        item->state = STATE_TRUE;
+        STATE = STATE_TRUE;
         item->type = cJSON_True;
-        scratchbuf[item->valueint++] = byte;
+        scratchbuf[scratch_it++] = byte;
         return STATE_RETURN_CONT;
     case 'f':
-        item->state = STATE_FALSE;
+        STATE = STATE_FALSE;
         item->type = cJSON_False;
-        scratchbuf[item->valueint++] = byte;
+        scratchbuf[scratch_it++] = byte;
         return STATE_RETURN_CONT;
     case 'n':
-        item->state = STATE_NULL;
+        STATE = STATE_NULL;
         item->type = cJSON_NULL;
-        scratchbuf[item->valueint++] = byte;
+        scratchbuf[scratch_it++] = byte;
         return STATE_RETURN_CONT;
     case '-':
     case '0':
@@ -298,9 +315,9 @@ static int state_item(cJSON *item, char byte)
     case '7':
     case '8':
     case '9':
-        item->state = STATE_NUMBER;
+        STATE = STATE_NUMBER;
         item->type = cJSON_Number;
-        scratchbuf[item->valueint++] = byte;
+        scratchbuf[scratch_it++] = byte;
         return STATE_RETURN_CONT;
     default:
         return STATE_RETURN_FAIL;
@@ -311,16 +328,16 @@ static int state_string(cJSON *item, char byte)
 {
     if (byte == '"')
     {
-        append(item, '\0');
+        string_append(item, '\0');
         return STATE_RETURN_DONE;
     }
     else if (byte == '\\')
     {
-        item->state = STATE_SPECIAL_CHAR;
+        STATE = STATE_SPECIAL_CHAR;
     }
     else
     {
-        append(item, byte);
+        string_append(item, byte);
     }
 
     return STATE_RETURN_CONT;
@@ -331,37 +348,39 @@ static int state_special_char(cJSON *item, char byte)
     switch (byte)
     {
     case 'b':
-        append(item, '\b');
+        string_append(item, '\b');
         break;
 
     case 'f':
-        append(item, '\f');
+        string_append(item, '\f');
         break;
 
     case 'n':
-        append(item, '\n');
+        string_append(item, '\n');
         break;
 
     case 'r':
-        append(item, '\r');
+        string_append(item, '\r');
         break;
 
     case 't':
-        append(item, '\t');
+        string_append(item, '\t');
         break;
 
     case '"':
     case '\\':
     case '/':
-        append(item, byte);
+        string_append(item, byte);
         break;
+
+        // FIXME: case 'u' not handled: followed by four hex digits
 
     default:
         return STATE_RETURN_FAIL;
         break;
     }
 
-    item->state = STATE_STRING;
+    STATE = STATE_STRING;
 
     return STATE_RETURN_CONT;
 }
@@ -372,13 +391,14 @@ static int state_number(cJSON *item, char byte)
         byte == '7' || byte == '8' || byte == '9' || byte == '.' || byte == 'e' || byte == 'E' || byte == '-' ||
         byte == '+')
     {
-        scratchbuf[item->valueint++] = byte;
+        scratchbuf[scratch_it++] = byte;
     }
     else if (is_whitespace(byte) || byte == ',' || byte == '}' || byte == ']')
     {
-        scratchbuf[item->valueint] = '\0';
-        item->valuedouble = strtod(scratchbuf, 0);
-        item->valueint = 0;
+        scratchbuf[scratch_it] = '\0';
+        item->valuedouble = strtod(scratchbuf, NULL);
+        cJSON_SetNumberValue(item, item->valuedouble);
+        scratch_it = 0;
         return STATE_RETURN_DONE;
     }
     else
@@ -391,16 +411,16 @@ static int state_number(cJSON *item, char byte)
 
 static int state_true(cJSON *item, char byte)
 {
-    scratchbuf[item->valueint++] = byte;
+    scratchbuf[scratch_it++] = byte;
 
-    if (item->valueint < 4)
+    if (scratch_it < 4)
     {
         return STATE_RETURN_CONT;
     }
 
     if (strncmp(scratchbuf, "true", 4) == 0)
     {
-        item->valueint = 0;
+        scratch_it = 0;
         return STATE_RETURN_DONE;
     }
 
@@ -409,16 +429,16 @@ static int state_true(cJSON *item, char byte)
 
 static int state_false(cJSON *item, char byte)
 {
-    scratchbuf[item->valueint++] = byte;
+    scratchbuf[scratch_it++] = byte;
 
-    if (item->valueint < 5)
+    if (scratch_it < 5)
     {
         return STATE_RETURN_CONT;
     }
 
     if (strncmp(scratchbuf, "false", 5) == 0)
     {
-        item->valueint = 0;
+        scratch_it = 0;
         return STATE_RETURN_DONE;
     }
 
@@ -427,26 +447,25 @@ static int state_false(cJSON *item, char byte)
 
 static int state_null(cJSON *item, char byte)
 {
-    scratchbuf[item->valueint++] = byte;
+    scratchbuf[scratch_it++] = byte;
 
-    if (item->valueint < 4)
+    if (scratch_it < 4)
     {
         return STATE_RETURN_CONT;
     }
 
-    if (strncmp(scratchbuf, "null", 4) != 0)
+    if (strncmp(scratchbuf, "null", 4) == 0)
     {
-        return STATE_RETURN_FAIL;
+        scratch_it = 0;
+        return STATE_RETURN_DONE;
     }
 
-    item->valueint = 0;
-
-    return STATE_RETURN_DONE;
+    return STATE_RETURN_FAIL;
 }
 
 static int putbyte(cJSON *const item, char byte)
 {
-    switch (item->state)
+    switch (STATE)
     {
     case STATE_ITEM:
         return state_item(item, byte);
