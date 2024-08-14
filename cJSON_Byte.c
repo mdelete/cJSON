@@ -38,7 +38,8 @@ static int putbyte(cJSON *const item, char byte);
 // This is thread-unsafe but massively reduces (re-)allocations
 // FIXME: create a parsing context and add a dynamically allocated scratch buffer there
 static size_t scratch_it = 0;
-static char scratchbuf[128]; // sizeof(scratchbuf)-1 is also the maximum key or string length, may not be less
+static char scratchbuf[128]; // sizeof(scratchbuf)-1 is also the maximum key or string length, may not be less,
+                             // minimum length must be 4. At this setting, cJSON objects will be 36-44 byte each
 
 // FEATURE: deliberately misusing cJSON attribute valueint to keep the parser state, as it is never written when parsing
 #define STATE item->valueint
@@ -292,17 +293,14 @@ static int state_item(cJSON *item, char byte)
     case 't':
         STATE = STATE_TRUE;
         item->type = cJSON_True;
-        scratchbuf[scratch_it++] = byte;
         return STATE_RETURN_CONT;
     case 'f':
         STATE = STATE_FALSE;
         item->type = cJSON_False;
-        scratchbuf[scratch_it++] = byte;
         return STATE_RETURN_CONT;
     case 'n':
         STATE = STATE_NULL;
         item->type = cJSON_NULL;
-        scratchbuf[scratch_it++] = byte;
         return STATE_RETURN_CONT;
     case '-':
     case '0':
@@ -387,9 +385,13 @@ static int state_special_char(cJSON *item, char byte)
 
 static int state_number(cJSON *item, char byte)
 {
-    if (byte == '0' || byte == '1' || byte == '2' || byte == '3' || byte == '4' || byte == '5' || byte == '6' ||
-        byte == '7' || byte == '8' || byte == '9' || byte == '.' || byte == 'e' || byte == 'E' || byte == '-' ||
-        byte == '+')
+    if (scratch_it >= sizeof(scratchbuf))
+    {
+        return STATE_RETURN_FAIL;
+    }
+    else if (byte == '0' || byte == '1' || byte == '2' || byte == '3' || byte == '4' || byte == '5' || byte == '6' ||
+             byte == '7' || byte == '8' || byte == '9' || byte == '.' || byte == 'e' || byte == 'E' || byte == '-' ||
+             byte == '+')
     {
         scratchbuf[scratch_it++] = byte;
         return STATE_RETURN_CONT;
@@ -412,11 +414,11 @@ static int state_true(cJSON *item, char byte)
 {
     scratchbuf[scratch_it++] = byte;
 
-    if (scratch_it < 4)
+    if (scratch_it < 3)
     {
         return STATE_RETURN_CONT;
     }
-    else if (strncmp(scratchbuf, "true", 4) == 0)
+    else if (strncmp(scratchbuf, "rue", 3) == 0)
     {
         scratch_it = 0;
         return STATE_RETURN_DONE;
@@ -431,11 +433,11 @@ static int state_false(cJSON *item, char byte)
 {
     scratchbuf[scratch_it++] = byte;
 
-    if (scratch_it < 5)
+    if (scratch_it < 4)
     {
         return STATE_RETURN_CONT;
     }
-    else if (strncmp(scratchbuf, "false", 5) == 0)
+    else if (strncmp(scratchbuf, "alse", 4) == 0)
     {
         scratch_it = 0;
         return STATE_RETURN_DONE;
@@ -450,11 +452,11 @@ static int state_null(cJSON *item, char byte)
 {
     scratchbuf[scratch_it++] = byte;
 
-    if (scratch_it < 4)
+    if (scratch_it < 3)
     {
         return STATE_RETURN_CONT;
     }
-    else if (strncmp(scratchbuf, "null", 4) == 0)
+    else if (strncmp(scratchbuf, "ull", 3) == 0)
     {
         scratch_it = 0;
         return STATE_RETURN_DONE;
