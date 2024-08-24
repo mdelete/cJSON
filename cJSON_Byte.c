@@ -38,10 +38,11 @@ static int putbyte(cJSON *const item, char byte);
 // This is thread-unsafe but massively reduces (re-)allocations
 // FIXME: create a parsing context and add a dynamically allocated scratch buffer there
 static size_t scratch_it = 0;
-static char scratchbuf[128]; // sizeof(scratchbuf)-1 is also the maximum key or string length, may not be less,
-                             // minimum length must be 4. At this setting, cJSON objects will be 36-44 byte each
+static char scratchbuf[128]; // sizeof(scratchbuf)-1 is also the maximum key or string length.
+                             // Minimum length must be 4. At length 4, cJSON items will be 36-44 bytes each.
 
-// FEATURE: deliberately misusing cJSON attribute valueint to keep the parser state, as it is never written when parsing
+// FEATURE: deliberately misusing cJSON attribute valueint to keep the parser state, as it is never read or written
+// while parsing
 #define STATE item->valueint
 #define CHILDSTATE item->child->valueint
 #define MALLOC malloc
