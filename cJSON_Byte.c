@@ -372,7 +372,7 @@ static int state_special_char(cJSON *item, char byte)
         string_append(item, byte);
         break;
 
-        // FIXME: case 'u' not handled: followed by four hex digits
+        // FIXME: case 'u' not handled: followed by four hex digits XXXX and optional \uXXXX again (4 or 10 bytes from here)
 
     default:
         return STATE_RETURN_FAIL;
